@@ -24,6 +24,9 @@ int getpid(void);
 char* sys_sbrk(int,int);
 int pause(int);
 int uptime(void);
+int getuid(void);
+int setuid(int);
+int chmod(const char*, int);
 
 // ulib.c
 int stat(const char*, struct stat*);

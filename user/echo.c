@@ -17,3 +17,8 @@ main(int argc, char *argv[])
   }
   exit(0);
 }
+
+/*
+this program right here cant write presistenttly to the files as when i do echo hello >> fiename.txt
+the changes dont ecsit i suppose
+*/
