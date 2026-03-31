@@ -107,3 +107,30 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+
+uint64
+sys_getuid(void)
+{
+  return myproc()->uid;
+}
+
+uint64
+sys_setuid(void)
+{
+  int uid;
+  struct proc *p = myproc();
+  
+  argint(0, &uid);
+  
+  // Only root (UID 0) can change UID
+  if(p->uid != 0)
+    return -1;
+  
+  // Validate UID range (0-65535 for uint16)
+  if(uid < 0 || uid > 65535)
+    return -1;
+  
+  p->uid = (uint16)uid;
+  return 0;
+}

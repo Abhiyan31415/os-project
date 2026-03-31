@@ -192,6 +192,7 @@ sys_unlink(void)
   struct dirent de;
   char name[DIRSIZ], path[MAXPATH];
   uint off;
+  struct proc *p = myproc();
 
   if(argstr(0, path, MAXPATH) < 0)
     return -1;
@@ -203,6 +204,13 @@ sys_unlink(void)
   }
 
   ilock(dp);
+
+  // Check write permission on parent directory
+  if(!check_permission(dp, p, S_IWUSR)){
+    iunlockput(dp);
+    end_op();
+    return -1;
+  }
 
   // Cannot unlink "." or "..".
   if(namecmp(name, ".") == 0 || namecmp(name, "..") == 0)
@@ -247,11 +255,18 @@ create(char *path, short type, short major, short minor)
 {
   struct inode *ip, *dp;
   char name[DIRSIZ];
+  struct proc *p = myproc();
 
   if((dp = nameiparent(path, name)) == 0)
     return 0;
 
   ilock(dp);
+
+  // Check write permission on parent directory
+  if(!check_permission(dp, p, S_IWUSR)){
+    iunlockput(dp);
+    return 0;
+  }
 
   if((ip = dirlookup(dp, name, 0)) != 0){
     iunlockput(dp);
@@ -271,6 +286,15 @@ create(char *path, short type, short major, short minor)
   ip->major = major;
   ip->minor = minor;
   ip->nlink = 1;
+  
+  // Set owner and permissions
+  ip->uid = p->uid;
+  if(type == T_DIR){
+    ip->mode = 0755;  // rwxr-xr-x for directories
+  } else {
+    ip->mode = 0644;  // rw-r--r-- for files
+  }
+  
   iupdate(ip);
 
   if(type == T_DIR){  // Create . and .. entries.
@@ -309,6 +333,7 @@ sys_open(void)
   struct file *f;
   struct inode *ip;
   int n;
+  struct proc *p = myproc();
 
   argint(1, &omode);
   if((n = argstr(0, path, MAXPATH)) < 0)
@@ -328,6 +353,25 @@ sys_open(void)
       return -1;
     }
     ilock(ip);
+    
+    // Check write permission if opening for write
+    if((omode & O_WRONLY) || (omode & O_RDWR)){
+      if(!check_permission(ip, p, S_IWUSR)){
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+    }
+    
+    // Check read permission if opening for read
+    if(!(omode & O_WRONLY)){
+      if(!check_permission(ip, p, S_IRUSR)){
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+    }
+    
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
       end_op();
@@ -501,5 +545,43 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+uint64
+sys_chmod(void)
+{
+  char path[MAXPATH];
+  int mode;
+  struct inode *ip;
+  struct proc *p = myproc();
+
+  if(argstr(0, path, MAXPATH) < 0)
+    return -1;
+  
+  argint(1, &mode);
+
+  begin_op();
+  
+  if((ip = namei(path)) == 0){
+    end_op();
+    return -1;
+  }
+
+  ilock(ip);
+  
+  // Only owner or root can change permissions
+  if(p->uid != 0 && p->uid != ip->uid){
+    iunlockput(ip);
+    end_op();
+    return -1;
+  }
+
+  ip->mode = mode & 0777;  // Only keep permission bits
+  iupdate(ip);
+  
+  iunlockput(ip);
+  end_op();
+  
   return 0;
 }
