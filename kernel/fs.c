@@ -235,6 +235,8 @@ iupdate(struct inode *ip)
   dip->major = ip->major;
   dip->minor = ip->minor;
   dip->nlink = ip->nlink;
+  dip->uid = ip->uid;
+  dip->mode = ip->mode;
   dip->size = ip->size;
   memmove(dip->addrs, ip->addrs, sizeof(ip->addrs));
   log_write(bp);
@@ -308,6 +310,12 @@ ilock(struct inode *ip)
     ip->major = dip->major;
     ip->minor = dip->minor;
     ip->nlink = dip->nlink;
+    ip->uid = dip->uid;
+    ip->mode = dip->mode;
+    // Backward compatibility: if mode is 0, assume old file system
+    if(ip->mode == 0){
+      ip->mode = 0777;  // World-accessible (old behavior)
+    }
     ip->size = dip->size;
     memmove(ip->addrs, dip->addrs, sizeof(ip->addrs));
     brelse(bp);
@@ -475,6 +483,30 @@ itrunc(struct inode *ip)
   iupdate(ip);
 }
 
+// Check if process p can perform operation on inode ip.
+// op: S_IRUSR (read), S_IWUSR (write), S_IXUSR (execute)
+// Returns 1 if allowed, 0 if denied.
+// Caller must hold ip->lock.
+int
+check_permission(struct inode *ip, struct proc *p, int op)
+{
+  // Root (UID 0) bypasses all checks
+  if(p->uid == 0)
+    return 1;
+  
+  // Owner permissions
+  if(p->uid == ip->uid){
+    if(ip->mode & op)
+      return 1;
+  }
+  
+  // World permissions (shift op right by 6 bits: 0400 -> 0004)
+  if(ip->mode & (op >> 6))
+    return 1;
+  
+  return 0;  // Permission denied
+}
+
 // Copy stat information from inode.
 // Caller must hold ip->lock.
 void
@@ -485,6 +517,8 @@ stati(struct inode *ip, struct stat *st)
   st->type = ip->type;
   st->nlink = ip->nlink;
   st->size = ip->size;
+  st->uid = ip->uid;
+  st->mode = ip->mode;
 }
 
 // Read data from inode.

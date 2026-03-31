@@ -29,6 +29,18 @@ trapinithart(void)
   w_stvec((uint64)kernelvec);
 }
 
+
+static int
+mlfq_timeslice_trap(int level)
+{
+  switch(level) {
+    case 0: return MFLQ_TICKS_0;
+    case 1: return MFLQ_TICKS_1;
+    case 2: return MFLQ_TICKS_2;
+    case 3: return MFLQ_TICKS_3;
+    default: return MFLQ_TICKS_3;
+  }
+}
 //
 // handle an interrupt, exception, or system call from user space.
 // called from, and returns to, trampoline.S
@@ -81,8 +93,17 @@ usertrap(void)
     kexit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev==2){
+    p->mlfq_ticks_used++;
+    if(p->mlfq_ticks_used>=p->mlfq_ticks_allotment){
+      if(p->mlfq_level < NMLFQ_LEVELS - 1) {
+        p->mlfq_level++;
+      }
+      p->mlfq_ticks_used = 0;
+      p->mlfq_ticks_allotment = mlfq_timeslice_trap(p->mlfq_level);
+    }
     yield();
+  }
 
   prepare_return();
 
@@ -152,8 +173,20 @@ kerneltrap()
   }
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2 && myproc() != 0)
+  if(which_dev == 2 && myproc() != 0){
+    struct proc *p = myproc();
+    p->mlfq_ticks_used++;
+
+    if(p->mlfq_ticks_used >= p->mlfq_ticks_allotment) {
+      if(p->mlfq_level < NMLFQ_LEVELS - 1) {
+        p->mlfq_level++;
+      }
+      p->mlfq_ticks_used = 0;
+      p->mlfq_ticks_allotment = mlfq_timeslice_trap(p->mlfq_level);
+    }
     yield();
+
+  }
 
   // the yield() may have caused some traps to occur,
   // so restore trap registers for use by kernelvec.S's sepc instruction.
