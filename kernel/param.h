@@ -12,4 +12,9 @@
 #define FSSIZE       2000  // size of file system in blocks
 #define MAXPATH      128   // maximum file path name
 #define USERSTACK    1     // user stack pages
-
+#define NMLFQ_LEVELS 4     //number of priority queues
+#define MLFQ_BOOST_INTERVAL 100
+#define MFLQ_TICKS_0 1
+#define MFLQ_TICKS_1 2
+#define MFLQ_TICKS_2 4
+#define MFLQ_TICKS_3 8

@@ -19,6 +19,8 @@ extern void forkret(void);
 static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
+extern struct spinlock tickslock;
+extern uint ticks;
 
 // helps ensure that wakeups of wait()ing
 // parents are not lost. helps obey the
@@ -125,6 +127,9 @@ found:
   p->pid = allocpid();
   p->state = USED;
 
+  // Initialize UID to 0 (root) - will be inherited by fork()
+  p->uid = 0;
+
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
@@ -139,6 +144,10 @@ found:
     release(&p->lock);
     return 0;
   }
+
+  p->mlfq_level=0;
+  p->mlfq_ticks_used=0;
+  p->mlfq_ticks_allotment=MFLQ_TICKS_0;
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
@@ -168,6 +177,9 @@ freeproc(struct proc *p)
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
+  p->mlfq_level = 0;
+  p->mlfq_ticks_used = 0;
+  p->mlfq_ticks_allotment = 0;
   p->state = UNUSED;
 }
 
@@ -224,6 +236,9 @@ userinit(void)
   p = allocproc();
   initproc = p;
   
+  // Explicitly set init process to run as root (UID 0)
+  p->uid = 0;
+  
   p->cwd = namei("/");
 
   p->state = RUNNABLE;
@@ -267,6 +282,9 @@ kfork(void)
   if((np = allocproc()) == 0){
     return -1;
   }
+
+  // Inherit parent's UID
+  np->uid = p->uid;
 
   // Copy user memory from parent to child.
   if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
@@ -413,6 +431,33 @@ kwait(uint64 addr)
     sleep(p, &wait_lock);  //DOC: wait-sleep
   }
 }
+static int
+mlfq_timeslice(int level)
+{
+  switch(level) {
+    case 0: return MFLQ_TICKS_0;
+    case 1: return MFLQ_TICKS_1;
+    case 2: return MFLQ_TICKS_2;
+    case 3: return MFLQ_TICKS_3;
+    default: return MFLQ_TICKS_3;
+  }
+}
+static void
+mlfq_boost(void)
+{
+  struct proc *p;
+  for(p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+    if(p->state != UNUSED) {
+      p->mlfq_level = 0;
+      p->mlfq_ticks_used = 0;
+      p->mlfq_ticks_allotment = mlfq_timeslice(0);
+    }
+    release(&p->lock);
+  }
+}
+
+
 
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
@@ -426,6 +471,8 @@ scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
+  int level;
+  static uint last_boost_tick = 0;
 
   c->proc = 0;
   for(;;){
@@ -435,30 +482,38 @@ scheduler(void)
     // to avoid a possible race between an interrupt
     // and wfi.
     intr_on();
+
+    // MLFQ priority boost: periodically move all processes to queue 0
+    acquire(&tickslock);
+    uint now = ticks;
+    release(&tickslock);
+
+    if(now - last_boost_tick >= MLFQ_BOOST_INTERVAL) {
+      last_boost_tick = now;
+      mlfq_boost();
+    }
+
     intr_off();
 
     int found = 0;
+   for(level=0;level<NMLFQ_LEVELS && !found ;level++){
     for(p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
+        acquire(&p->lock);
+        if(p->state == RUNNABLE && p->mlfq_level == level) {
+          // Switch to chosen process.
+          p->state = RUNNING;
+          c->proc = p;
+          swtch(&c->context, &p->context);
 
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
+          // Process is done running for now.
+          c->proc = 0;
+          found = 1;
+          release(&p->lock);
+          break;   // restart scan from top priority
+        }
+        release(&p->lock);
       }
-      release(&p->lock);
-    }
-    if(found == 0) {
-      // nothing to run; stop running on this core until an interrupt.
-      asm volatile("wfi");
-    }
+   }
   }
 }
 
@@ -553,6 +608,19 @@ sleep(void *chan, struct spinlock *lk)
 
   acquire(&p->lock);  //DOC: sleeplock1
   release(lk);
+
+
+  p->mlfq_ticks_used = 0;
+  if(p->mlfq_level > 0){
+    p->mlfq_level--;
+    // Update allotment to match the new (higher-priority) level
+    switch(p->mlfq_level){
+      case 0: p->mlfq_ticks_allotment = MFLQ_TICKS_0; break;
+      case 1: p->mlfq_ticks_allotment = MFLQ_TICKS_1; break;
+      case 2: p->mlfq_ticks_allotment = MFLQ_TICKS_2; break;
+      default: p->mlfq_ticks_allotment = MFLQ_TICKS_3; break;
+    }
+  }
 
   // Go to sleep.
   p->chan = chan;
