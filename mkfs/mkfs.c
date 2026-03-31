@@ -82,7 +82,12 @@ main(int argc, char *argv[])
     exit(1);
   }
 
-  assert((BSIZE % sizeof(struct dinode)) == 0);
+  // Verify that struct dinode size is reasonable
+  // Note: BSIZE doesn't need to be evenly divisible by sizeof(struct dinode)
+  // We just need IPB (inodes per block) to be calculated correctly
+  // With 68-byte dinodes: IPB = 1024/68 = 15 inodes per block (4 bytes unused)
+  assert(sizeof(struct dinode) == 68);
+  assert((BSIZE / sizeof(struct dinode)) >= 1);
   assert((BSIZE % sizeof(struct dirent)) == 0);
 
   fsfd = open(argv[1], O_RDWR|O_CREAT|O_TRUNC, 0666);
@@ -229,6 +234,12 @@ ialloc(ushort type)
   din.type = xshort(type);
   din.nlink = xshort(1);
   din.size = xint(0);
+  din.uid = xshort(0);  // All files owned by root
+  if(type == T_DIR){
+    din.mode = xshort(0755);  // rwxr-xr-x for directories
+  } else {
+    din.mode = xshort(0644);  // rw-r--r-- for files
+  }
   winode(inum, &din);
   return inum;
 }
