@@ -1,0 +1,48 @@
+#!/usr/bin/expect -f
+# Test that xv6 boots and basic commands work
+
+set timeout 10
+spawn make qemu
+
+# Wait for shell prompt
+expect {
+    "$ " { 
+        send_user "\n✓ xv6 booted successfully\n"
+    }
+    timeout {
+        send_user "\n✗ Timeout waiting for shell\n"
+        exit 1
+    }
+}
+
+# Test ls command
+send "ls\r"
+expect {
+    "." {
+        send_user "\n✓ ls command works\n"
+    }
+    timeout {
+        send_user "\n✗ ls command failed\n"
+        exit 1
+    }
+}
+
+# Test echo command
+send "echo hello\r"
+expect {
+    "hello" {
+        send_user "\n✓ echo command works\n"
+    }
+    timeout {
+        send_user "\n✗ echo command failed\n"
+        exit 1
+    }
+}
+
+send_user "\n✓ All basic tests passed\n"
+
+# Exit
+send "\x01"
+send "x"
+
+expect eof
